@@ -1,0 +1,14 @@
+# .gitignore
+/bin/
+/obj/
+*.exe
+*.dll
+*.so
+*.dylib
+vendor/
+**/*_test.go
+*.log
+*.sqlite
+*.db
+.env
+.DS_Store

@@ -1,0 +1,25 @@
+[Unit]
+Description=Go Proxy Checker Service
+After=network.target
+
+[Service]
+# Имя пользователя, от которого запускать (обычно root или ваш user)
+User=root
+
+# ОЧЕНЬ ВАЖНО: Рабочая папка, где лежит index.html
+WorkingDirectory=/opt/proxy-checker
+
+# Путь к самому файлу программы
+ExecStart=/opt/proxy-checker/proxy-checker
+
+# Автоматически перезапускать, если упадет
+Restart=always
+RestartSec=3
+
+# Логирование (опционально, но полезно)
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=proxy-checker
+
+[Install]
+WantedBy=multi-user.target

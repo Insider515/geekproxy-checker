@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Ultimate Proxy Checker</title>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #171240; color: #eee; margin: 0; padding: 20px; }
+        .container { max-width: 950px; margin: 0 auto; background: #383269; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 20px #000; }
+        
+        .tabs { display: flex; background: #17123f; }
+        .tab { flex: 1; padding: 15px; cursor: pointer; background: #17123f; color: #fff; border: none; font-weight: bold; font-size: 15px; }
+        .tab.active { background: #383269; color: #0ff; border-top: 3px solid #0ff; }
+        
+        .content { display: none; padding: 25px; }
+        .content.active { display: block; }
+        
+        textarea { width: 100%; height: 180px; background: #fff; border: 1px solid #40396f; color: #363636; padding: 10px; border-radius: 5px; font-family: monospace; font-size: 13px; }
+        input { width: 100%; padding: 10px; background: #fff; border: 1px solid #40396f; color: #363636; border-radius: 5px; margin-bottom: 10px; }
+        
+        button { width: 100%; padding: 12px; background: #0ff; border: none; color: #000; border-radius: 5px; cursor: pointer; font-weight: bold; margin-top: 10px; }
+        button:hover { background: #008cb0; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
+        td, th { padding: 10px; border-bottom: 1px solid #3f396e; text-align: left; }
+        th { color: #fff; font-weight: normal; }
+        
+        .badge { padding: 3px 6px; border-radius: 4px; font-size: 11px; font-weight: bold; color: white; }
+        .b-socks { background: #8e44ad; }
+        .b-http { background: #e67e22; }
+        .b-ss { background: #27ae60; }
+        
+        .stat-ok { color: #2ecc71; font-weight: bold; }
+        .stat-dead { color: #e74c3c; font-weight: bold; }
+
+        .flag-icon {
+            width: 24px;
+            height: 18px;
+            vertical-align: middle;
+            margin-right: 8px;
+            border-radius: 2px;
+            object-fit: cover;
+            box-shadow: 0 0 2px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="tabs">
+        <button class="tab active" onclick="sw('single')">UDP / Detail</button>
+        <button class="tab" onclick="sw('bulk')">Bulk Check (SOCKS5/HTTP/SS)</button>
+    </div>
+
+    <!-- SINGLE CHECK -->
+    <div id="single" class="content active">
+        <h3>UDP Check</h3>
+        <input type="text" id="sIn" placeholder="IP:Port:User:Pass">
+        <button onclick="checkS()">Check</button>
+        <div id="sOut" style="margin-top:15px"></div>
+    </div>
+
+    <!-- BULK CHECK -->
+    <div id="bulk" class="content">
+        <h3>Bulk Check</h3>
+        <p style="font-size:12px; color:#fff">Supported formats:<br>1. <code>IP:Port:User:Pass</code><br>2. <code>ss://method:pass@host:port</code> (Shadowsocks)</p>
+        <textarea id="bIn" placeholder="185.1.1.1:4000:user:pass&#10;ss://aes-256-gcm:pass@1.2.3.4:8888"></textarea>
+        <button onclick="checkB()">Check List</button>
+        <table id="bTab" style="display:none">
+            <thead><tr><th>IP</th><th>Port</th><th>Country</th><th>Type</th><th>Status</th></tr></thead>
+            <tbody id="bBod"></tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // URL к папке с флагами
+    const FLAGS_URL = "https://geekproxy.io/image/flags/4x3/";
+
+    // Функция, возвращающая HTML картинки флага
+    function getFlag(code) {
+        if (!code || code === '-' || code.length > 2) return '';
+        // Переводим код в нижний регистр (RU -> ru)
+        const lowerCode = code.toLowerCase();
+        return `<img src="${FLAGS_URL}${lowerCode}.svg" class="flag-icon" alt="${code}">`;
+    }
+
+    function sw(id) {
+        document.querySelectorAll('.content').forEach(e=>e.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
+        document.getElementById(id).classList.add('active');
+        event.currentTarget.classList.add('active');
+    }
+
+    // --- SINGLE CHECK ---
+    async function checkS() {
+        const proxy = document.getElementById('sIn').value;
+        const out = document.getElementById('sOut');
+        out.innerHTML = 'Wait...';
+        try {
+            const r = await fetch('/check-proxy', {method:'POST', body:JSON.stringify({proxy})});
+            const d = await r.json();
+            if(d.error) return out.innerHTML = `<span style="color:red">${d.error}</span>`;
+            
+            // Вставляем флаг
+            const flag = getFlag(d.ip_info.country);
+            
+            out.innerHTML = `
+                <div style="padding:15px; background:#222; border-radius:5px; border-left:4px solid ${d.udp.success?'#2ecc71':'#e74c3c'}">
+                    <div>UDP: <b>${d.udp.success?'✅ YES':'❌ NO'}</b> <span style="color:#aaa">(${d.udp.message})</span></div>
+                    <div style="margin-top:8px; border-top:1px solid #444; padding-top:8px;line-height: 1.8;">
+                        <div>Geo: ${flag} <b>${d.ip_info.country}, ${d.ip_info.city}</b></div>
+                        <div>IP: ${d.ip_info.ip}</div>
+                        <div>Type: <b style="color:${d.ip_info.type.includes('Hosting')?'#e74c3c':'#2ecc71'}">${d.ip_info.type}</b></div>
+                        <div style="color:#fff; font-size:12px">ISP: ${d.ip_info.org}</div>
+                    </div>
+                </div>
+            `;
+        } catch(e) { out.innerHTML = 'Error'; console.error(e); }
+    }
+
+    // --- BULK CHECK ---
+    async function checkB() {
+        const txt = document.getElementById('bIn').value;
+        if(!txt) return alert('Empty!');
+        const proxies = txt.split('\n').map(x=>x.trim()).filter(x=>x);
+        
+        document.getElementById('bTab').style.display='table';
+        const tb = document.getElementById('bBod');
+        tb.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#f0f">Checking...</td></tr>';
+
+        try {
+            const r = await fetch('/check-bulk', {method:'POST', body:JSON.stringify({proxies})});
+            const res = await r.json();
+            tb.innerHTML = '';
+            
+            res.forEach(item => {
+                let badge = '';
+                if(item.status) {
+                    if(item.type === 'SOCKS5') badge = '<span class="badge b-socks">SOCKS5</span>';
+                    else if(item.type === 'HTTP') badge = '<span class="badge b-http">HTTP</span>';
+                    else if(item.type === 'Shadowsocks') badge = '<span class="badge b-ss">SS (AES)</span>';
+                }
+                
+                // Генерируем флаг для таблицы
+                let countryDisplay = item.country || '-';
+                if(item.country) {
+                    countryDisplay = getFlag(item.country) + ' ' + item.country;
+                }
+
+                tb.innerHTML += `<tr>
+                    <td>${item.ip || item.original.substring(0,25)+'...'}</td>
+                    <td>${item.port || '-'}</td>
+                    <td>${countryDisplay}</td>
+                    <td>${badge}</td>
+                    <td>${item.status ? '<span class="stat-ok">Working</span>' : '<span class="stat-dead">Dead</span>'} ${item.error ? '<small style="color:#777">('+item.error+')</small>' : ''}</td>
+                </tr>`;
+            });
+        } catch(e) { alert('Error'); console.error(e); }
+    }
+</script>
+</body>
+</html>
