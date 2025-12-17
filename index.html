@@ -73,13 +73,10 @@
 </div>
 
 <script>
-    // URL к папке с флагами
     const FLAGS_URL = "https://geekproxy.io/image/flags/4x3/";
 
-    // Функция, возвращающая HTML картинки флага
     function getFlag(code) {
         if (!code || code === '-' || code.length > 2) return '';
-        // Переводим код в нижний регистр (RU -> ru)
         const lowerCode = code.toLowerCase();
         return `<img src="${FLAGS_URL}${lowerCode}.svg" class="flag-icon" alt="${code}">`;
     }
@@ -105,8 +102,9 @@
             const flag = getFlag(d.ip_info.country);
             
             out.innerHTML = `
-                <div style="padding:15px; background:#222; border-radius:5px; border-left:4px solid ${d.udp.success?'#2ecc71':'#e74c3c'}">
-                    <div>UDP: <b>${d.udp.success?'✅ YES':'❌ NO'}</b> <span style="color:#aaa">(${d.udp.message})</span></div>
+                <div style="padding:15px; background:#222; border-radius:5px; border-left:4px solid ${d.udp.success || d.udp_google.success ?'#2ecc71':'#e74c3c'}">
+                    <div>UDP (Proxy): <b>${d.udp.success?'✅ YES':'❌ NO'}</b> <span style="color:#aaa">(${d.udp.message})</span></div>
+                    <div style="margin-top:5px;">UDP (Google DNS): <b>${d.udp_google.success?'✅ YES':'❌ NO'}</b> <span style="color:#aaa">(${d.udp_google.message})</span></div>
                     <div style="margin-top:8px; border-top:1px solid #444; padding-top:8px;line-height: 1.8;">
                         <div>Geo: ${flag} <b>${d.ip_info.country}, ${d.ip_info.city}</b></div>
                         <div>IP: ${d.ip_info.ip}</div>
@@ -141,7 +139,6 @@
                     else if(item.type === 'Shadowsocks') badge = '<span class="badge b-ss">SS (AES)</span>';
                 }
                 
-                // Генерируем флаг для таблицы
                 let countryDisplay = item.country || '-';
                 if(item.country) {
                     countryDisplay = getFlag(item.country) + ' ' + item.country;

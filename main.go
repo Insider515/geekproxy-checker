@@ -37,6 +37,7 @@ type BulkResult struct {
 
 type CheckResult struct {
 	UDP    UDPResult    `json:"udp"`
+	UDPGoogle UDPResult `json:"udp_google"` // Добавлено для проверки UDP на Google
 	IPInfo IPInfoResult `json:"ip_info"`
 	Error  string       `json:"error,omitempty"`
 }
@@ -88,9 +89,15 @@ func handleSingleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	udpSuccess, udpMsg := checkSocks5UDP(ip, port, user, pass)
+	udpGoogleSuccess, udpGoogleMsg := checkSocks5UDPToRemote(ip, port, user, pass, "8.8.8.8:53")
+	
 	ipResult := checkIPInfoFull(ip, port, user, pass)
 
-	resp := CheckResult{UDP: UDPResult{Success: udpSuccess, Message: udpMsg}, IPInfo: ipResult}
+	resp := CheckResult{
+		UDP:       UDPResult{Success: udpSuccess, Message: udpMsg},
+		UDPGoogle: UDPResult{Success: udpGoogleSuccess, Message: udpGoogleMsg},
+		IPInfo:    ipResult,
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
@@ -329,7 +336,6 @@ func checkIPInfoFull(host string, port int, user, password string) IPInfoResult 
 	return IPInfoResult{IP: geo.IP, City: geo.City, Country: geo.Country, Org: geo.Org, Hostname: geo.Hostname, Type: ipType}
 }
 
-// UDP
 func checkSocks5UDP(host string, port int, user, password string) (bool, string) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
@@ -357,10 +363,124 @@ func checkSocks5UDP(host string, port int, user, password string) (bool, string)
 	conn.Write([]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	respHeader := make([]byte, 10)
 	if _, err := io.ReadFull(conn, respHeader); err != nil {
-		return false, "UDP fail"
+		return false, "UDP association fail"
 	}
-	if respHeader[1] == 0x00 {
-		return true, "UDP OK"
+	if respHeader[1] == 0x00 { // BND.ADDR (Bound Address)
+		return true, "UDP OK (local)"
 	}
-	return false, "No UDP"
+	return false, "No UDP (local)"
+}
+
+func checkSocks5UDPToRemote(host string, port int, user, password string, remoteAddr string) (bool, string) {
+	proxyAddr := fmt.Sprintf("%s:%d", host, port)
+	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
+	if err != nil {
+		return false, fmt.Sprintf("TCP dial fail: %v", err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	//No Auth (0x00) Username/Password (0x02)
+	if _, err := conn.Write([]byte{0x05, 0x02, 0x00, 0x02}); err != nil {
+		return false, fmt.Sprintf("Handshake send fail: %v", err)
+	}
+	
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return false, fmt.Sprintf("Handshake read fail: %v", err)
+	}
+	if header[0] != 0x05 { // SOCKS5 Version
+		return false, fmt.Sprintf("Invalid SOCKS version: %x", header[0])
+	}
+
+	if header[1] == 0x02 {
+		authPayload := []byte{0x01, byte(len(user))}
+		authPayload = append(authPayload, []byte(user)...)
+		authPayload = append(authPayload, byte(len(password)))
+		authPayload = append(authPayload, []byte(password)...)
+		
+		if _, err := conn.Write(authPayload); err != nil {
+			return false, fmt.Sprintf("Auth send fail: %v", err)
+		}
+		
+		authResp := make([]byte, 2)
+		if _, err := io.ReadFull(conn, authResp); err != nil || authResp[1] != 0x00 {
+			return false, fmt.Sprintf("Auth fail: %v (resp: %x)", err, authResp[1])
+		}
+	} else if header[1] != 0x00 { //No Auth
+		return false, fmt.Sprintf("Unsupported auth method: %x", header[1])
+	}
+
+
+	// 4. UDP ASSOCIATE Command
+	// CMD = 0x03 (UDP ASSOCIATE)
+	// RSV = 0x00
+	// ATYP = 0x01 (IPv4)
+	// BND.ADDR (0.0.0.0) и BND.PORT (0)
+	if _, err := conn.Write([]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
+		return false, fmt.Sprintf("UDP ASSOCIATE send fail: %v", err)
+	}
+
+	//UDP ASSOCIATE
+	respHeader := make([]byte, 10) // BND.ADDR, BND.PORT
+	if _, err := io.ReadFull(conn, respHeader); err != nil {
+		return false, fmt.Sprintf("UDP ASSOCIATE read fail: %v", err)
+	}
+
+	if respHeader[1] != 0x00 { // (REP field)
+		return false, fmt.Sprintf("UDP ASSOCIATE rejected: %x", respHeader[1])
+	}
+
+	bndAddr := net.IP(respHeader[4:8]).String()
+	bndPort := int(respHeader[8])<<8 | int(respHeader[9])
+	
+	udpConn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: net.ParseIP(bndAddr), Port: bndPort})
+	if err != nil {
+		return false, fmt.Sprintf("Failed to dial UDP for proxy: %v", err)
+	}
+	defer udpConn.Close()
+	udpConn.SetDeadline(time.Now().Add(5 * time.Second))
+	
+	dnsQuery := []byte{
+		0x12, 0x34, // ID
+		0x01, 0x00, // Flags: Standard query
+		0x00, 0x01, // Questions: 1
+		0x00, 0x00, // Answer RRs: 0
+		0x00, 0x00, // Authority RRs: 0
+		0x00, 0x00, // Additional RRs: 0
+		0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', // QNAME: example
+		0x03, 'c', 'o', 'm', // QNAME: com
+		0x00,       // QNAME: null terminator
+		0x00, 0x01, // QTYPE: A (Host Address)
+		0x00, 0x01, // QCLASS: IN (Internet)
+	}
+
+	socks5UdpHeader := []byte{
+		0x00, 0x00, 0x00, // RSV, FRAG
+		0x01,             // ATYP: IPv4
+		0x08, 0x08, 0x08, 0x08, // DST.ADDR: 8.8.8.8
+		0x00, 0x35, // DST.PORT: 53 (0x0035)
+	}
+
+	packet := append(socks5UdpHeader, dnsQuery...)
+
+	if _, err := udpConn.Write(packet); err != nil {
+		return false, fmt.Sprintf("UDP send fail via proxy: %v", err)
+	}
+
+	response := make([]byte, 1024)
+	n, _, err := udpConn.ReadFromUDP(response)
+	if err != nil {
+		return false, fmt.Sprintf("UDP read fail via proxy: %v", err)
+	}
+
+	if n < len(socks5UdpHeader) + 12 {
+		return false, "Short UDP response"
+	}
+
+	if response[len(socks5UdpHeader)+2] & 0x80 == 0 {
+		return false, "Invalid DNS response (not a response)"
+	}
+	
+	return true, "UDP OK (Google DNS)"
 }
